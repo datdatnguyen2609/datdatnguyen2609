@@ -10,7 +10,7 @@ with open('csdl.txt', 'r', encoding='utf-8') as f:
             diem_qua_trinh.append(diem)
         except ValueError:
             pass  # Bo qua dong loi neu co
-
+ 
 # Chuyen sang DataFrame de de thong ke
 df = pd.DataFrame({'Diem qua trinh': diem_qua_trinh})
 
