@@ -648,7 +648,7 @@ def visualize_gradient_field(example_img_flat,
     plt.savefig(save_path, dpi=300)
     plt.close()
 
-def survey_pca_components(features_scaled, labels,
+    def survey_pca_components(features_scaled, labels,
                           comp_list=None,
                           save_path=None):
     """
@@ -739,14 +739,6 @@ def main():
     scaler = StandardScaler()
     features_scaled = scaler.fit_transform(features_hog)
     print("Da chuan hoa feature bang StandardScaler")
-
-        # Khao sat accuracy theo cac muc PCA khac nhau
-    survey_pca_components(
-        features_scaled,
-        labels,
-        comp_list=[0.7, 0.8, 0.9, 0.95, 0.99],
-        save_path=os.path.join(FIG_DIR, "pca_accuracy_curve.png")
-    )
 
     # PCA
     print(f"\nAp dung PCA, input dim = {features_scaled.shape[1]}")
