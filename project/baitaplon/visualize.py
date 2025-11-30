@@ -1,7 +1,11 @@
 """
 Nguyen Thanh Dat - 211440519 - BTL
-FER2013 K-Means Clustering - HOG + PCA (core version)
-+ Them cac hinh visualize data flow: HOG, PCA, KMeans
+FER2013 K-Means Clustering - HOG + PCA (train/test version)
+- HOG tu cai dat
+- K-Means tu cai dat
+- PCA dung thu vien
+- Train tren tap training, danh gia tren tap test
+- Ve confusion matrix tren TAP TEST va luu file
 """
 
 import os
@@ -22,6 +26,9 @@ from collections import Counter
 
 # ==================== CAU HINH ====================
 DATA_DIR = "fer2013"
+TRAIN_DIR_NAME = "training"
+TEST_DIR_NAME = "test"   # Dat ten theo cau truc folder cua ban
+
 EMOTIONS = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 N_CLUSTERS = 7
 IMG_SIZE = (48, 48)
@@ -29,10 +36,48 @@ IMG_SIZE = (48, 48)
 HOG_CELL_SIZE = 6
 HOG_BLOCK_SIZE = 2
 HOG_BINS = 9
-PCA_COMPONENTS = 0.95
+
+# Cac moc PCA can thu (ti le phuong sai)
+PCA_RATIOS = [0.50, 0.60, 0.70, 0.80, 0.90, 0.95]
 
 FIG_DIR = "figs"
 
+# ==================== 0. HAM VE CONFUSION MATRIX ====================
+def plot_confusion_matrix(cm, emotions, title="", save_path=None):
+    """
+    Ve confusion matrix va luu thanh file anh neu co save_path
+    cm la confusion_matrix tren TAP TEST
+    """
+    plt.figure(figsize=(8, 6))
+    plt.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
+    plt.title(title)
+    plt.colorbar()
+
+    num_classes = len(emotions)
+    tick_marks = np.arange(num_classes)
+    plt.xticks(tick_marks, emotions, rotation=45)
+    plt.yticks(tick_marks, emotions)
+
+    thresh = cm.max() / 2.0 if cm.max() > 0 else 0.5
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            plt.text(
+                j, i,
+                str(cm[i, j]),
+                horizontalalignment="center",
+                verticalalignment="center",
+                color="white" if cm[i, j] > thresh else "black"
+            )
+
+    plt.ylabel("True label")
+    plt.xlabel("Predicted label")
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+        print(f"Da luu confusion matrix: {save_path}")
+
+    plt.close()
 
 # ==================== 1. LOAD DU LIEU ====================
 def load_data(data_folder, max_images_per_emotion=500):
@@ -56,6 +101,7 @@ def load_data(data_folder, max_images_per_emotion=500):
                     continue
                 img = cv2.resize(img, IMG_SIZE)
                 img = img.astype(np.float32) / 255.0
+                # Bo qua anh qua toi, khong co thong tin
                 if img.std() < 0.02:
                     continue
                 images.append(img.flatten())
@@ -67,10 +113,9 @@ def load_data(data_folder, max_images_per_emotion=500):
     
     images = np.array(images)
     labels = np.array(labels)
-    print(f"\nTong so anh: {images.shape[0]}")
+    print(f"\nTong so anh load duoc: {images.shape[0]}")
     print(f"Input shape: {images.shape}")
     return images, labels
-
 
 # ==================== 2. HOG TU CAI DAT ====================
 def hog_single_image(img,
@@ -126,7 +171,6 @@ def hog_single_image(img,
 
     return np.array(hog_vector, dtype=np.float32)
 
-
 def extract_hog_features(images_flat, img_size=IMG_SIZE):
     print("\nTrich dac trung HOG tu cai dat...")
     n_samples = images_flat.shape[0]
@@ -142,7 +186,6 @@ def extract_hog_features(images_flat, img_size=IMG_SIZE):
     hog_features = np.array(hog_features)
     print(f"HOG feature shape: {hog_features.shape}")
     return hog_features
-
 
 # ==================== 3. K-MEANS TU CAI DAT ====================
 def kmeans_single_run(X, n_clusters, max_iter=300, random_state=None):
@@ -177,13 +220,16 @@ def kmeans_single_run(X, n_clusters, max_iter=300, random_state=None):
 
     return labels, centroids, inertia
 
-
-def apply_kmeans(features,
-                 n_clusters=N_CLUSTERS,
-                 n_init=10,
-                 max_iter=300,
-                 base_random_state=42):
-    print(f"\nChay K-Means tu cai dat, K = {n_clusters}...")
+def apply_kmeans_train(features_train,
+                       n_clusters=N_CLUSTERS,
+                       n_init=10,
+                       max_iter=300,
+                       base_random_state=42):
+    """
+    Chay KMeans tren TAP TRAIN
+    Tra ve centroids va nhan cluster cho TAP TRAIN
+    """
+    print(f"\nChay K-Means tu cai dat tren TAP TRAIN, K = {n_clusters}...")
     best_inertia = None
     best_labels = None
     best_centroids = None
@@ -191,7 +237,7 @@ def apply_kmeans(features,
     for i in range(n_init):
         rstate = base_random_state + i
         labels, centroids, inertia = kmeans_single_run(
-            features,
+            features_train,
             n_clusters=n_clusters,
             max_iter=max_iter,
             random_state=rstate
@@ -201,47 +247,57 @@ def apply_kmeans(features,
             best_labels = labels
             best_centroids = centroids
 
-    print("Hoan thanh K-Means")
+    print("Hoan thanh K-Means tren TAP TRAIN")
     return best_centroids, best_labels
 
+def assign_clusters(features, centroids):
+    """
+    Gan cluster cho features bat ky, dung centroids da train
+    """
+    diff = features[:, np.newaxis, :] - centroids[np.newaxis, :, :]
+    dist_sq = np.sum(diff ** 2, axis=2)
+    labels = np.argmin(dist_sq, axis=1)
+    return labels
 
 # ==================== 4. MAP CLUSTER SANG LABEL ====================
-def map_clusters_to_emotions(cluster_labels, true_labels):
-    print("\nMap cluster sang emotion pho bien nhat...")
+def map_clusters_to_emotions(cluster_labels_train, true_labels_train):
+    """
+    Dung TAP TRAIN de map cluster -> emotion pho bien
+    """
+    print("\nMap cluster tren TAP TRAIN sang emotion pho bien nhat...")
     cluster_map = {}
     for cluster_id in range(N_CLUSTERS):
-        mask = (cluster_labels == cluster_id)
-        emotions_in_cluster = true_labels[mask]
+        mask = (cluster_labels_train == cluster_id)
+        emotions_in_cluster = true_labels_train[mask]
         if len(emotions_in_cluster) > 0:
             most_common = Counter(emotions_in_cluster).most_common(1)[0][0]
             cluster_map[cluster_id] = most_common
             print(f"  Cluster {cluster_id} -> {EMOTIONS[most_common]}")
         else:
             print(f"  Cluster {cluster_id} rong")
-    mapped_labels = np.array([cluster_map.get(c, -1) for c in cluster_labels])
-    return cluster_map, mapped_labels
-
+    mapped_train = np.array([cluster_map.get(c, -1) for c in cluster_labels_train])
+    return cluster_map, mapped_train
 
 # ==================== 5. DANH GIA ====================
-def evaluate(features, cluster_labels, true_labels, mapped_labels):
-    print("\n========== DANH GIA ==========")
+def evaluate(features, cluster_labels, true_labels, mapped_labels, set_name="TEST"):
+    print(f"\n========== DANH GIA TREN TAP {set_name} ==========")
     try:
         silhouette = silhouette_score(features, cluster_labels)
-        print(f"Silhouette Score: {silhouette:.4f}")
+        print(f"Silhouette Score ({set_name}): {silhouette:.4f}")
     except Exception as e:
         silhouette = float('nan')
-        print("Khong tinh duoc Silhouette:", e)
+        print(f"Khong tinh duoc Silhouette ({set_name}):", e)
 
     ari = adjusted_rand_score(true_labels, cluster_labels)
     nmi = normalized_mutual_info_score(true_labels, cluster_labels)
     acc = accuracy_score(true_labels, mapped_labels)
 
-    print(f"ARI: {ari:.4f}")
-    print(f"NMI: {nmi:.4f}")
-    print(f"Accuracy sau mapping: {acc:.4f}")
+    print(f"ARI ({set_name}): {ari:.4f}")
+    print(f"NMI ({set_name}): {nmi:.4f}")
+    print(f"Accuracy sau mapping ({set_name}): {acc:.4f}")
 
     cm = confusion_matrix(true_labels, mapped_labels)
-    print("Confusion matrix:")
+    print(f"Confusion matrix ({set_name}):")
     print(cm)
 
     return {
@@ -252,590 +308,121 @@ def evaluate(features, cluster_labels, true_labels, mapped_labels):
         "confusion_matrix": cm
     }
 
-
-# ==================== 6. HÀM VẼ VISUALIZE ====================
-def ensure_fig_dir():
-    os.makedirs(FIG_DIR, exist_ok=True)
-
-
-def visualize_preprocessing(example_img_flat, save_path):
-    img = example_img_flat.reshape(IMG_SIZE)
-
-    plt.figure(figsize=(8, 3))
-    plt.subplot(1, 3, 1)
-    plt.imshow(img, cmap="gray")
-    plt.title("Anh goc 48x48")
-    plt.axis("off")
-
-    plt.subplot(1, 3, 2)
-    img_norm = (img - img.min()) / (img.max() - img.min() + 1e-6)
-    plt.imshow(img_norm, cmap="gray")
-    plt.title("Anh sau chuan hoa")
-    plt.axis("off")
-
-    plt.subplot(1, 3, 3)
-    plt.imshow(img, cmap="gray")
-    plt.title("Vector hoa (minh hoa)")
-    plt.axis("off")
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def visualize_gradients(example_img_flat, save_path):
-    img = example_img_flat.reshape(IMG_SIZE).astype(np.float32)
-
-    gx = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=1)
-    gy = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=1)
-    mag, angle = cv2.cartToPolar(gx, gy, angleInDegrees=True)
-
-    plt.figure(figsize=(10, 3))
-    plt.subplot(1, 4, 1)
-    plt.imshow(img, cmap="gray")
-    plt.title("Anh xam")
-    plt.axis("off")
-
-    plt.subplot(1, 4, 2)
-    plt.imshow(gx, cmap="gray")
-    plt.title("Gradient X")
-    plt.axis("off")
-
-    plt.subplot(1, 4, 3)
-    plt.imshow(gy, cmap="gray")
-    plt.title("Gradient Y")
-    plt.axis("off")
-
-    plt.subplot(1, 4, 4)
-    plt.imshow(mag, cmap="gray")
-    plt.title("Do lon gradient")
-    plt.axis("off")
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def visualize_cells(example_img_flat, cell_size=HOG_CELL_SIZE, save_path="cells.png"):
-    img = example_img_flat.reshape(IMG_SIZE)
-
-    h, w = img.shape
-    plt.figure(figsize=(4, 4))
-    plt.imshow(img, cmap="gray")
-    for y in range(0, h, cell_size):
-        plt.axhline(y - 0.5, color="red", linewidth=0.5)
-    for x in range(0, w, cell_size):
-        plt.axvline(x - 0.5, color="red", linewidth=0.5)
-    plt.title("Anh voi luoi cell")
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def visualize_hog_vector(hog_vec, save_path):
-    plt.figure(figsize=(8, 3))
-    plt.plot(hog_vec)
-    plt.title(f"Vector HOG, do dai = {len(hog_vec)}")
-    plt.xlabel("Chi so")
-    plt.ylabel("Gia tri")
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def visualize_pca_scatter(features_pca, labels, title, save_path):
-    if features_pca.shape[1] < 2:
-        print("Khong du 2 chieu PCA de ve scatter")
-        return
-
-    x = features_pca[:, 0]
-    y = features_pca[:, 1]
-
-    plt.figure(figsize=(6, 5))
-    for idx, emo in enumerate(EMOTIONS):
-        mask = (labels == idx)
-        plt.scatter(x[mask], y[mask], s=5, alpha=0.5, label=emo)
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.title(title)
-    plt.legend(markerscale=2, fontsize=8)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def visualize_pca_clusters(features_pca, cluster_labels, centroids_pca, save_path):
-    if features_pca.shape[1] < 2:
-        print("Khong du 2 chieu PCA de ve scatter cluster")
-        return
-
-    x = features_pca[:, 0]
-    y = features_pca[:, 1]
-
-    plt.figure(figsize=(6, 5))
-    for k in range(N_CLUSTERS):
-        mask = (cluster_labels == k)
-        plt.scatter(x[mask], y[mask], s=5, alpha=0.5, label=f"Cluster {k}")
-    plt.scatter(centroids_pca[:, 0], centroids_pca[:, 1],
-                s=80, marker="X", edgecolors="black", linewidths=1.0,
-                label="Centroid")
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.title("KMeans trong khong gian PCA 2D")
-    plt.legend(markerscale=2, fontsize=8)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def visualize_confusion_matrix(cm, classes, save_path):
-    plt.figure(figsize=(6, 5))
-    plt.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
-    plt.title("Confusion matrix")
-    plt.colorbar()
-    tick_marks = np.arange(len(classes))
-    plt.xticks(tick_marks, classes, rotation=45, ha="right")
-    plt.yticks(tick_marks, classes)
-
-    thresh = cm.max() / 2.0 if cm.max() > 0 else 0.5
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            val = cm[i, j]
-            plt.text(j, i, str(val),
-                     horizontalalignment="center",
-                     verticalalignment="center",
-                     color="white" if val > thresh else "black",
-                     fontsize=8)
-
-    plt.ylabel("Nhan that")
-    plt.xlabel("Nhan du doan")
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def visualize_pipeline_diagram(save_path):
-    plt.figure(figsize=(8, 2))
-    steps = [
-        "FER2013\ntraining",
-        "Tien xu ly\nresize 48x48\nnormalize",
-        "HOG\ncustom",
-        "StandardScaler",
-        "PCA\n95% var",
-        "KMeans\nK=7",
-        "Map\ncluster->emotion",
-        "Danh gia\nACC ARI NMI"
-    ]
-    x_positions = np.linspace(0.1, 0.9, len(steps))
-    y = 0.5
-
-    for x, text in zip(x_positions, steps):
-        plt.text(x, y, text, ha="center", va="center",
-                 bbox=dict(boxstyle="round,pad=0.3", fc="lightgray", ec="black", lw=1),
-                 fontsize=8)
-    for i in range(len(steps) - 1):
-        plt.arrow(x_positions[i] + 0.04, y,
-                  x_positions[i+1] - x_positions[i] - 0.08, 0,
-                  length_includes_head=True,
-                  head_width=0.03, head_length=0.02)
-
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-def visualize_block_normalization(example_img_flat,
-                                  cell_size=HOG_CELL_SIZE,
-                                  block_size=HOG_BLOCK_SIZE,
-                                  nbins=HOG_BINS,
-                                  save_path="04_block_normalization.png"):
-    """
-    Minh hoa 1 block 2x2 cell
-    - Anh goc voi luoi cell va block duoc to dam
-    - Histogram block truoc chuan hoa
-    - Histogram block sau chuan hoa
-    """
-    img = example_img_flat.reshape(IMG_SIZE).astype(np.float32)
-
-    # Tinh gradient va histogram cell giong hog_single_image
-    gx = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=1)
-    gy = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=1)
-    mag, angle = cv2.cartToPolar(gx, gy, angleInDegrees=True)
-    angle = angle % 180.0
-
-    h, w = img.shape
-    cell_h = cell_w = cell_size
-    n_cells_y = h // cell_h
-    n_cells_x = w // cell_w
-
-    hist_cells = np.zeros((n_cells_y, n_cells_x, nbins), dtype=np.float32)
-    bin_size = 180.0 / nbins
-
-    for cy in range(n_cells_y):
-        for cx in range(n_cells_x):
-            y_start = cy * cell_h
-            y_end = y_start + cell_h
-            x_start = cx * cell_w
-            x_end = x_start + cell_w
-
-            cell_mag = mag[y_start:y_end, x_start:x_end].reshape(-1)
-            cell_angle = angle[y_start:y_end, x_start:x_end].reshape(-1)
-
-            for m, a in zip(cell_mag, cell_angle):
-                bin_idx = int(a // bin_size)
-                if bin_idx == nbins:
-                    bin_idx = nbins - 1
-                hist_cells[cy, cx, bin_idx] += m
-
-    # Chon 1 block o giua anh de minh hoa
-    block_h = block_w = block_size
-    by = max(0, n_cells_y // 2 - 1)
-    bx = max(0, n_cells_x // 2 - 1)
-
-    block_hist = hist_cells[by:by+block_h, bx:bx+block_w, :].ravel()
-    eps = 1e-6
-    norm = np.sqrt(np.sum(block_hist ** 2) + eps)
-    block_hist_norm = block_hist / norm
-
-    # Ve hinh
-    plt.figure(figsize=(10, 3))
-
-    # 1) Anh goc + luoi cell + block duoc khoanh
-    plt.subplot(1, 3, 1)
-    plt.imshow(img, cmap="gray")
-    # luoi cell
-    for y in range(0, h, cell_size):
-        plt.axhline(y - 0.5, color="red", linewidth=0.5)
-    for x in range(0, w, cell_size):
-        plt.axvline(x - 0.5, color="red", linewidth=0.5)
-    # khoanh block
-    y0 = by * cell_h
-    x0 = bx * cell_w
-    y1 = y0 + block_h * cell_h
-    x1 = x0 + block_w * cell_w
-    plt.gca().add_patch(
-        plt.Rectangle((x0 - 0.5, y0 - 0.5),
-                      x1 - x0, y1 - y0,
-                      fill=False, edgecolor="yellow", linewidth=2)
-    )
-    plt.title("Block 2x2 cell duoc chon")
-    plt.axis("off")
-
-    # 2) Histogram block truoc chuan hoa
-    plt.subplot(1, 3, 2)
-    plt.bar(np.arange(len(block_hist)), block_hist)
-    plt.title("Histogram block\ntruoc chuan hoa")
-    plt.xlabel("Chi so bin")
-    plt.ylabel("Gia tri")
-
-    # 3) Histogram block sau chuan hoa
-    plt.subplot(1, 3, 3)
-    plt.bar(np.arange(len(block_hist_norm)), block_hist_norm)
-    plt.title("Histogram block\nsau chuan hoa L2")
-    plt.xlabel("Chi so bin")
-    plt.ylabel("Gia tri")
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-def visualize_cells_and_values(example_img_flat,
-                               cell_size=HOG_CELL_SIZE,
-                               save_path="cells_and_values.png"):
-    """
-    Ve anh goc co luoi cell va anh ma tran gia tri trung binh tung cell
-    """
-    img = example_img_flat.reshape(IMG_SIZE).astype(np.float32)
-    h, w = img.shape
-    cell_h = cell_w = cell_size
-    n_cells_y = h // cell_h
-    n_cells_x = w // cell_w
-
-    # Tinh gia tri trung binh theo tung cell
-    cell_avg = np.zeros((n_cells_y, n_cells_x), dtype=np.float32)
-    for cy in range(n_cells_y):
-        for cx in range(n_cells_x):
-            y0 = cy * cell_h
-            y1 = y0 + cell_h
-            x0 = cx * cell_w
-            x1 = x0 + cell_w
-            cell_avg[cy, cx] = img[y0:y1, x0:x1].mean()
-
-    plt.figure(figsize=(8, 3))
-
-    # 1) Anh goc voi luoi cell
-    plt.subplot(1, 2, 1)
-    plt.imshow(img, cmap="gray")
-    for y in range(0, h + 1, cell_h):
-        plt.axhline(y - 0.5, color="red", linewidth=0.5)
-    for x in range(0, w + 1, cell_w):
-        plt.axvline(x - 0.5, color="red", linewidth=0.5)
-    plt.axis("off")
-    plt.title("Anh goc + luoi cell")
-
-    # 2) Ma tran gia tri cell + so
-    plt.subplot(1, 2, 2)
-    plt.imshow(cell_avg, cmap="gray", origin="upper")
-    plt.colorbar(fraction=0.046, pad=0.04)
-    plt.xticks(range(n_cells_x))
-    plt.yticks(range(n_cells_y))
-    for cy in range(n_cells_y):
-        for cx in range(n_cells_x):
-            val = int(cell_avg[cy, cx])
-            plt.text(cx, cy, str(val),
-                     ha="center", va="center",
-                     color="red", fontsize=6)
-    plt.title("Gia tri trung binh tung cell")
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-
-def visualize_gradient_field(example_img_flat,
-                             cell_size=HOG_CELL_SIZE,
-                             save_path="gradient_field.png"):
-    """
-    Ve vector gradient tai tam moi cell tren anh xam
-    giong hinh cac thanh nho mau do
-    """
-    img = example_img_flat.reshape(IMG_SIZE).astype(np.float32)
-
-    # Gradient
-    gx = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=1)
-    gy = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=1)
-
-    h, w = img.shape
-    cell_h = cell_w = cell_size
-    n_cells_y = h // cell_h
-    n_cells_x = w // cell_w
-
-    # Lay gradient tai tam moi cell
-    X = []
-    Y = []
-    U = []
-    V = []
-    for cy in range(n_cells_y):
-        for cx in range(n_cells_x):
-            y0 = cy * cell_h
-            x0 = cx * cell_w
-            yc = y0 + cell_h // 2
-            xc = x0 + cell_w // 2
-            if yc >= h or xc >= w:
-                continue
-            gx_val = gx[yc, xc]
-            gy_val = gy[yc, xc]
-
-            # vector chuan hoa de ve cho dep
-            mag = np.sqrt(gx_val ** 2 + gy_val ** 2) + 1e-6
-            scale = 0.4 * cell_size / mag
-            U.append(gx_val * scale)
-            V.append(-gy_val * scale)  # tru cho dung huong trong he truc anh
-            X.append(xc)
-            Y.append(yc)
-
-    plt.figure(figsize=(4, 4))
-    plt.imshow(img, cmap="gray")
-    plt.quiver(X, Y, U, V,
-               color="red",
-               angles="xy",
-               scale_units="xy",
-               scale=1,
-               width=0.003)
-    plt.axis("off")
-    plt.title("Truong gradient tai cac cell")
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-
-def survey_pca_components(features_scaled, labels,
-                          comp_list=None,
-                          save_path=None):
-    """
-    Khao sat anh huong cua so thanh phan PCA den accuracy
-    features_scaled da duoc StandardScaler bien doi
-    comp_list co the chua ti le phuong sai vd 0.7 0.8 0.9 0.95 0.99
-    """
-    if comp_list is None:
-        comp_list = [0.7, 0.8, 0.9, 0.95, 0.99]
-
-    results = []
-
-    print("\n===== Khao sat PCA components =====")
-    for comp in comp_list:
-        print(f"\nPCA n_components = {comp}")
-        pca_tmp = PCA(n_components=comp, random_state=42)
-        feats_pca_tmp = pca_tmp.fit_transform(features_scaled)
-        print(f"  Output dim: {feats_pca_tmp.shape[1]}")
-        print(f"  Tong ti le phuong sai: {pca_tmp.explained_variance_ratio_.sum():.4f}")
-
-        if feats_pca_tmp.shape[0] < N_CLUSTERS:
-            print("  So mau < so cluster, bo qua cau hinh nay")
-            continue
-
-        centroids_tmp, cluster_labels_tmp = apply_kmeans(feats_pca_tmp)
-        _, mapped_labels_tmp = map_clusters_to_emotions(cluster_labels_tmp, labels)
-        metrics_tmp = evaluate(feats_pca_tmp, cluster_labels_tmp, labels, mapped_labels_tmp)
-
-        results.append({
-            "components": comp,
-            "dim": feats_pca_tmp.shape[1],
-            "variance_ratio": pca_tmp.explained_variance_ratio_.sum(),
-            "accuracy": metrics_tmp["accuracy"],
-            "ari": metrics_tmp["ari"],
-            "nmi": metrics_tmp["nmi"]
-        })
-
-    if not results:
-        print("Khong co cau hinh PCA hop le de khao sat")
-        return
-
-    print("\n===== Tong hop ket qua khao sat PCA =====")
-    for r in results:
-        print(f"n_components={r['components']}, "
-              f"dim={r['dim']}, "
-              f"var={r['variance_ratio']:.4f}, "
-              f"ACC={r['accuracy']:.4f}, "
-              f"ARI={r['ari']:.4f}, "
-              f"NMI={r['nmi']:.4f}")
-
-    # Ve duong cong accuracy theo n_components neu muon
-    if save_path is not None:
-        xs = [r["components"] for r in results]
-        accs = [r["accuracy"] for r in results]
-
-        plt.figure(figsize=(5, 3))
-        plt.plot(xs, accs, marker="o")
-        plt.xlabel("PCA n_components")
-        plt.ylabel("Accuracy sau mapping")
-        plt.title("Accuracy theo PCA n_components")
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig(save_path, dpi=300)
-        plt.close()
-        print(f"Da luu hinh khao sat PCA tai {save_path}")
-
 # ==================== MAIN ====================
 def main():
-    ensure_fig_dir()
+    print("\n==============================================")
+    print("FER2013 K-MEANS CLUSTERING - TRAIN/TEST VERSION")
+    print("==============================================")
 
-    print("\n==========================================")
-    print("FER2013 K-MEANS CLUSTERING - CORE VERSION")
-    print("==========================================")
+    os.makedirs(FIG_DIR, exist_ok=True)
 
-    train_path = os.path.join(DATA_DIR, "training")
-    images, labels = load_data(train_path, max_images_per_emotion=300)
+    train_path = os.path.join(DATA_DIR, TRAIN_DIR_NAME)
+    test_path = os.path.join(DATA_DIR, TEST_DIR_NAME)
 
-    if images.size == 0:
-        print("Khong co du lieu, thoat")
+    # Load tap TRAIN
+    X_train_imgs, y_train = load_data(train_path, max_images_per_emotion=300)
+    if X_train_imgs.size == 0:
+        print("Khong co du lieu TRAIN, thoat")
         return
 
-    print(f"\nTong so anh: {len(images)}")
+    # Load tap TEST
+    X_test_imgs, y_test = load_data(test_path, max_images_per_emotion=300)
+    if X_test_imgs.size == 0:
+        print("Khong co du lieu TEST, thoat")
+        return
 
-    # HOG
-    features_hog = extract_hog_features(images)
+    print(f"\nSo anh TRAIN: {len(X_train_imgs)}")
+    print(f"So anh TEST:  {len(X_test_imgs)}")
 
-    # StandardScaler
+    # HOG cho TRAIN va TEST
+    print("\n=== Trich HOG TAP TRAIN ===")
+    X_train_hog = extract_hog_features(X_train_imgs)
+
+    print("\n=== Trich HOG TAP TEST ===")
+    X_test_hog = extract_hog_features(X_test_imgs)
+
+    # StandardScaler fit tren TRAIN, transform cho ca TRAIN va TEST
     scaler = StandardScaler()
-    features_scaled = scaler.fit_transform(features_hog)
-    print("Da chuan hoa feature bang StandardScaler")
+    X_train_scaled = scaler.fit_transform(X_train_hog)
+    X_test_scaled = scaler.transform(X_test_hog)
+    print("\nDa chuan hoa feature bang StandardScaler (fit tren TRAIN)")
 
-        # Khao sat accuracy theo cac muc PCA khac nhau
-    survey_pca_components(
-        features_scaled,
-        labels,
-        comp_list=[0.7, 0.8, 0.9, 0.95, 0.99],
-        save_path=os.path.join(FIG_DIR, "pca_accuracy_curve.png")
-    )
+    all_results_test = []  # ket qua tren TAP TEST cho tung ty le PCA
 
-    # PCA
-    print(f"\nAp dung PCA, input dim = {features_scaled.shape[1]}")
-    pca = PCA(n_components=PCA_COMPONENTS, random_state=42)
-    features_pca = pca.fit_transform(features_scaled)
-    print(f"Output dim sau PCA: {features_pca.shape[1]}")
-    print(f"Tong ti le phuong sai: {pca.explained_variance_ratio_.sum():.4f}")
+    # Thu nghiem nhieu ti le PCA khac nhau
+    for ratio in PCA_RATIOS:
+        print("\n==============================================")
+        print(f"Ap dung PCA, ti le phuong sai yeu cau = {ratio:.2f}")
+        print("==============================================")
 
-    # KMeans
-    if features_pca.shape[0] < N_CLUSTERS:
-        print("So mau < so cluster, khong chay duoc KMeans")
+        # PCA fit tren TAP TRAIN, sau do transform ca TRAIN va TEST
+        pca = PCA(n_components=ratio, random_state=42)
+        X_train_pca = pca.fit_transform(X_train_scaled)
+        X_test_pca = pca.transform(X_test_scaled)
+        real_ratio = pca.explained_variance_ratio_.sum()
+        print(f"Output dim sau PCA (TRAIN): {X_train_pca.shape[1]}")
+        print(f"Tong ti le phuong sai thuc te: {real_ratio:.4f}")
+
+        if X_train_pca.shape[0] < N_CLUSTERS:
+            print("So mau TRAIN < so cluster, khong chay duoc KMeans o ti le nay")
+            continue
+
+        # KMeans tren TAP TRAIN
+        centroids, cluster_labels_train = apply_kmeans_train(X_train_pca)
+
+        # Gan cluster cho TAP TEST
+        cluster_labels_test = assign_clusters(X_test_pca, centroids)
+
+        # Map cluster -> emotion dua tren TAP TRAIN
+        cluster_map, mapped_train = map_clusters_to_emotions(cluster_labels_train, y_train)
+
+        # Map label cho TAP TEST
+        mapped_test = np.array([cluster_map.get(c, -1) for c in cluster_labels_test])
+
+        # Danh gia tren TAP TEST
+        metrics_test = evaluate(X_test_pca, cluster_labels_test, y_test, mapped_test, set_name="TEST")
+
+        # Ve confusion matrix tren TAP TEST
+        cm_test = metrics_test["confusion_matrix"]
+        cm_title = f"Confusion Matrix TEST - PCA {int(ratio * 100)}% (var={real_ratio:.2f})"
+        cm_path = os.path.join(FIG_DIR, f"cm_test_pca_{int(ratio * 100)}.png")
+        plot_confusion_matrix(cm_test, EMOTIONS, title=cm_title, save_path=cm_path)
+
+        all_results_test.append({
+            "pca_ratio": ratio,
+            "real_ratio": real_ratio,
+            "metrics_test": metrics_test,
+            "cm_path_test": cm_path
+        })
+
+    if not all_results_test:
+        print("Khong co ket qua nao tu cac moc PCA, thoat")
         return
 
-    centroids_pca_space, cluster_labels = apply_kmeans(features_pca)
+    # Tong ket accuracy tren TAP TEST theo tung moc PCA
+    print("\n=========== TONG KET ACCURACY TREN TAP TEST THEO PCA ===========")
+    for res in all_results_test:
+        r = res["pca_ratio"]
+        acc = res["metrics_test"]["accuracy"]
+        ari = res["metrics_test"]["ari"]
+        nmi = res["metrics_test"]["nmi"]
+        print(f"PCA yeu cau {r:.2f} -> Accuracy TEST: {acc:.4f}, ARI TEST: {ari:.4f}, NMI TEST: {nmi:.4f}")
 
-    # Map cluster sang emotion
-    cluster_map, mapped_labels = map_clusters_to_emotions(cluster_labels, labels)
+    # Tim moc PCA co accuracy TAP TEST cao nhat
+    accuracies_test = [res["metrics_test"]["accuracy"] for res in all_results_test]
+    best_idx = int(np.argmax(accuracies_test))
+    best_res = all_results_test[best_idx]
 
-    # Danh gia
-    metrics = evaluate(features_pca, cluster_labels, labels, mapped_labels)
-
-    print("\n=========== TONG KET ===========")
-    print(f"Silhouette: {metrics['silhouette']:.4f}")
-    print(f"Accuracy:   {metrics['accuracy']:.4f}")
-    print(f"ARI:        {metrics['ari']:.4f}")
-    print(f"NMI:        {metrics['nmi']:.4f}")
-    print("================================")
-
-    # ==================== VISUALIZE ====================
-    print("\nTao cac hinh visualize trong thu muc figs/ ...")
-
-    example_idx = 0
-    example_img_flat = images[example_idx]
-    example_hog_vec = features_hog[example_idx]
-
-    visualize_preprocessing(
-        example_img_flat,
-        os.path.join(FIG_DIR, "01_preprocessing.png")
-    )
-
-    visualize_cells_and_values(
-        example_img_flat,
-        cell_size=HOG_CELL_SIZE,
-        save_path=os.path.join(FIG_DIR, "02_cells_and_values.png")
-    )
-
-    visualize_gradient_field(
-        example_img_flat,
-        cell_size=HOG_CELL_SIZE,
-        save_path=os.path.join(FIG_DIR, "03_gradient_field.png")
-    )
-
-    visualize_hog_vector(
-        example_hog_vec,
-        os.path.join(FIG_DIR, "04_hog_vector.png")
-    )
-
-    # PCA 2D theo nhan that
-    if features_pca.shape[1] >= 2:
-        visualize_pca_scatter(
-            features_pca,
-            labels,
-            "PCA 2D to mau theo nhan that",
-            os.path.join(FIG_DIR, "05_pca_true_labels.png")
-        )
-
-        # PCA 2D theo cluster
-        centroids_pca_2d = centroids_pca_space[:, :2]
-        visualize_pca_clusters(
-            features_pca[:, :2],
-            cluster_labels,
-            centroids_pca_2d,
-            os.path.join(FIG_DIR, "06_pca_clusters.png")
-        )
-
-    # Confusion matrix
-    visualize_confusion_matrix(
-        metrics["confusion_matrix"],
-        EMOTIONS,
-        os.path.join(FIG_DIR, "07_confusion_matrix.png")
-    )
-
-    # Flowchart pipeline
-    visualize_pipeline_diagram(
-        os.path.join(FIG_DIR, "00_pipeline.png")
-    )
-
-    print("Da luu cac hinh: 00_pipeline.png den 07_confusion_matrix.png trong thu muc figs/")
-
+    print("\n=========== CAU HINH TOT NHAT TREN TAP TEST ===========")
+    print(f"PCA yeu cau: {best_res['pca_ratio']:.2f}")
+    print(f"Ti le phuong sai thuc te: {best_res['real_ratio']:.4f}")
+    print(f"Accuracy TEST: {best_res['metrics_test']['accuracy']:.4f}")
+    print(f"ARI TEST:      {best_res['metrics_test']['ari']:.4f}")
+    print(f"NMI TEST:      {best_res['metrics_test']['nmi']:.4f}")
+    print("Confusion matrix TEST cua cau hinh tot nhat:")
+    print(best_res["metrics_test"]["confusion_matrix"])
+    print(f"File anh confusion matrix TEST tot nhat: {best_res['cm_path_test']}")
+    print("=======================================================")
 
 if __name__ == "__main__":
     main()
